@@ -1,13 +1,12 @@
-import 'dart:convert';
-
 import 'package:demiui/providers/map_pro.dart';
 import 'package:demiui/providers/polygen_pro.dart';
 import 'package:demiui/screens/detail_screen.dart';
+import 'package:demiui/utils/api.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -17,12 +16,6 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  GoogleMapController? _mapController;
-  Future<void> _setMapStyle(GoogleMapController controller) async {
-    String style = await rootBundle.loadString('assets/my_style.json');
-    controller.setMapStyle(style);
-  }
-
   @override
   Widget build(BuildContext context) {
     final h = MediaQuery.of(context).size.height;
@@ -30,34 +23,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     final markers = ref.watch(markerProvider);
     final polygons = ref.watch(polygonProvider);
-    const CameraPosition initialPosition = CameraPosition(
-      target: LatLng(26.866483, 75.756339), // Initial position
-      zoom: 17.0,
-    );
+
     return Scaffold(
       backgroundColor: Colors.blue[800],
       body: Stack(
         children: [
           Container(
             height: h * 0.4,
-            child: GoogleMap(
-              initialCameraPosition: initialPosition,
-              mapType: MapType.normal,
-              markers: markers,
-              polygons: polygons, // Use markers from provider
-              onMapCreated: (GoogleMapController controller) {
-                _mapController = controller;
-                _setMapStyle(controller);
-                ref
-                    .read(markerProvider.notifier)
-                    .addMarker(const LatLng(26.866483, 75.756339), "hello");
-              },
-              onTap: (LatLng position) async {
-                List<LatLng> boundaryPoints =
-                    await fetchHouseBoundary(position);
-                if (boundaryPoints.isNotEmpty && _mapController != null) {
-                  ref.read(polygonProvider.notifier).addPolygon(boundaryPoints);
-                  showModalBottomSheet(
+            decoration: const BoxDecoration(
+                borderRadius: BorderRadius.only(
+              bottomLeft: Radius.circular(15),
+              bottomRight: Radius.circular(10),
+            )),
+            child: FlutterMap(
+              options: MapOptions(
+                  initialCenter: const LatLng(26.866483, 75.756339),
+                  initialZoom: 18,
+                  maxZoom: 25,
+                  minZoom: 15,
+                  onMapReady: () {
+                    ref
+                        .read(markerProvider.notifier)
+                        .addMarker(const LatLng(26.866483, 75.756339), "hello");
+                  },
+                  onTap: (tapPosition, points) async {
+                    print(points);
+                    final point = await queryBuildingData(points);
+                    ref.read(polygonProvider.notifier).addPolygon(point);
+                    if(point!=null){
+                          showModalBottomSheet(
                     isDismissible: false,
                     barrierColor: Colors.transparent,
                     isScrollControlled: false,
@@ -68,8 +62,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       return _inviteCard(context, h, w);
                     },
                   );
-                }
-              },
+                    }
+                  }),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  subdomains: const ['a', 'b', 'c'],
+                  userAgentPackageName: 'com.example.demiui',
+                ),
+                PolygonLayer(
+                  polygons: polygons,
+                ),
+                MarkerLayer(
+                  markers: markers,
+                ),
+              ],
             ),
           ),
           appbar(h, w),
@@ -108,7 +116,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             child: Row(
               children: [
                 Container(
-                    padding: EdgeInsets.all(5),
+                    padding: const EdgeInsets.all(5),
                     width: 0.11 * w,
                     height: 0.05 * h,
                     child: ClipOval(
@@ -164,12 +172,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              Spacer(),
+              const Spacer(),
               IconButton(
                 icon: const Icon(Icons.close, color: Colors.white70),
                 onPressed: () {
                   ref.read(polygonProvider.notifier).addPolygon(
-                      [LatLng(0, 0), LatLng(0, 0), LatLng(0, 0), LatLng(0, 0)]);
+                      []);
                   Navigator.pop(context);
                 },
               )
@@ -198,36 +206,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
                 height: h * 0.05,
                 width: double.infinity,
-                child: Center(child: const Text('Send invite'))),
+                child: const Center(child: Text('Send invite'))),
           ),
         ],
       ),
     );
-  }
-}
-
-Future<List<LatLng>> fetchHouseBoundary(LatLng position) async {
-  final url =
-      'https://overpass-api.de/api/interpreter?data=[out:json];way["building"](around:50,${position.latitude},${position.longitude});out geom;';
-
-  final response = await http.get(Uri.parse(url));
-
-  if (response.statusCode == 200) {
-    final data = json.decode(response.body);
-    final List<LatLng> boundaryPoints = [];
-
-    // Parse the building coordinates
-    for (var element in data['elements']) {
-      if (element['geometry'] != null) {
-        for (var geom in element['geometry']) {
-          boundaryPoints.add(LatLng(geom['lat'], geom['lon']));
-        }
-      }
-    }
-
-    return boundaryPoints;
-  } else {
-    print('Failed to load boundary data.');
-    return [];
   }
 }
